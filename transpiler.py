@@ -83,7 +83,10 @@ def transpile_binary_expression(node):
 
 def transpile_return_statement(node):
     argument = traverse_ast(node.argument)
-    return f"(return {argument})"
+    if argument == "null":
+        return '(err "null value")'
+    else:
+        return f"(ok {argument})"
 
 def transpile_call_expression(node):
     callee = traverse_ast(node.callee)
