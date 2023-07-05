@@ -1,213 +1,162 @@
-import esprima
+import esprima, re
 
-def indent_lines(lines, indent_level):
-    indentation = " " * indent_level
-    indented_lines = [f"{indentation}{line}" for line in lines.split("\n")]
+# https://pypi.org/project/esprima/
+# esprima demo https://esprima.org/demo/parse.html?code=
+
+def indent_lines(code, num_spaces):
+    lines = code.split("\n")
+    indented_lines = [(num_spaces * " ") + line for line in lines]
     return "\n".join(indented_lines)
 
-def transpile_js_to_clarity(js_code):
-    # Parse JavaScript code and generate AST
-    ast = esprima.parseScript(js_code)
+def transpile_literal(node):
+    literal_value = node.value
+    if isinstance(literal_value, bool):
+        return f"{str(literal_value).lower()}"
+    if isinstance(literal_value, str):
+        if re.match(r"^(SP|ST)[A-HJ-NP-Za-km-z0-9]{39}(\.[A-Za-z0-9\-_]+)?$", literal_value):
+            return f"'{literal_value}"
+    return str(literal_value)
 
-    # Traverse the AST and generate Clarity code
-    clarity_code = traverse_ast(ast)
+def transpile_identifier(node):
+    identifier_name = node.name
+    return identifier_name
 
-    return clarity_code
+def transpile_function_declaration(node):
+    function_name = node.id.name
+    function_body = node.body
+    transpiled_body = indent_lines(traverse_ast(function_body), 2)
+    return f"(define-public ({function_name})\n{transpiled_body}\n)"
+
+def transpile_variable_declaration(node):
+    variable_declarations = []
+    for declaration in node.declarations:
+        variable_name = declaration.id.name
+        print('*** kind *** ')
+        print(dir(declaration))
+        print(declaration)
+        print(declaration.kind)
+        if node.kind == "const":
+            if declaration.init:
+                variable_value = traverse_ast(declaration.init)
+                variable_declaration = f"(define-constant {variable_name} {variable_value})"
+            else:
+                raise ValueError(f"Missing initializer for constant variable '{variable_name}'")
+        else:
+            if declaration.init:
+                variable_value = traverse_ast(declaration.init)
+                variable_declaration = f"(define-variable {variable_name} {variable_value})"
+            else:
+                variable_declaration = f"(define-variable {variable_name})"
+        variable_declarations.append(variable_declaration)
+    return "\n".join(variable_declarations)
+
+def transpile_assignment_expression(node):
+    variable_name = node["left"]["name"]
+    variable_value = traverse_ast(node["right"])
+    return f"(var-set! {variable_name} {variable_value})"
+
+def transpile_call_expression(node):
+    function_name = node["callee"]["name"]
+    arguments = []
+    for arg in node["arguments"]:
+        arguments.append(traverse_ast(arg))
+    return f"({function_name} {' '.join(arguments)})"
+
+def transpile_if_statement(node):
+    test_expression = traverse_ast(node["test"])
+    consequent_block = traverse_ast(node["consequent"])
+    alternate_block = traverse_ast(node["alternate"]) if "alternate" in node else ""
+    return f"(if {test_expression}\n  {consequent_block}\n  {alternate_block})"
+
+def transpile_block_statement(node):
+    body = node.body
+    statement_code = ""
+    for statement in body:
+        statement_code += traverse_ast(statement) + "\n"
+    return f"(begin\n{statement_code})"
+
+def transpile_binary_expression(node):
+    operator = node.operator
+    left_operand = traverse_ast(node.left)
+    right_operand = traverse_ast(node.right)
+    return f"({operator} {left_operand} {right_operand})"
+
+def transpile_return_statement(node):
+    argument = traverse_ast(node.argument)
+    return f"(return {argument})"
+
+def transpile_call_expression(node):
+    callee = traverse_ast(node.callee)
+    arguments = [traverse_ast(arg) for arg in node.arguments]
+    arguments_str = " ".join(arguments)
+    return f"({callee} {arguments_str})"
+
+def transpile_logical_expression(node):
+    operator = node.operator
+    if operator == "&&":
+        operator = "and"
+    elif operator == "||":
+        operator = "or"
+    left_expression = traverse_ast(node.left)
+    right_expression = traverse_ast(node.right)
+    return f"({operator} {left_expression} {right_expression})"
 
 def traverse_ast(node):
-    if node["type"] == "Program":
-        for statement in node["body"]:
-            traverse_ast(statement)
-    elif node["type"] == "FunctionDeclaration":
-        function_name = node["id"]["name"]
-        function_body = node["body"]
-
-        # Process the function declaration
-        clarity_function = f"(define-public ({function_name} {' '.join(arg['name'] for arg in node['params'])})\n"
-        clarity_function += indent_lines(traverse_ast(function_body), 2) + "\n)"
-        
-        # Additional processing or transformation of the Clarity function can be done here
-
-        return clarity_function
-      
-    elif node["type"] == "VariableDeclaration": # prefixed by `const` to be a constant.
-        variable_declarations = []
-        for declaration in node["declarations"]:
-            variable_name = declaration["id"]["name"]
-
-            # Process the variable declaration
-            if node["kind"] == "const":
-                # Handle constant declaration
-                constant_value = traverse_ast(declaration["init"])
-                clarity_constant_declaration = f"(define-constant {variable_name} {constant_value})"
-            else:
-                # Handle other variable declarations
-                variable_value = traverse_ast(declaration["init"])
-                clarity_variable_declaration = f"(define-{node['kind']} {variable_name} {variable_value})"
-                variable_declarations.append(clarity_variable_declaration)
-
-        if node["kind"] == "const":
-            return "\n".join(variable_declarations + [clarity_constant_declaration])
-        else:
-            return "\n".join(variable_declarations)
-    
-    elif node["type"] == "AssignmentExpression":
-        variable_name = node["left"]["name"]
-
-        # Process the assignment expression
-        clarity_assignment = f"(= {variable_name} {traverse_ast(node['right'])})"
-
-        # Additional processing or transformation of the Clarity assignment can be done here
-
-        return clarity_assignment
-
-    elif node["type"] == "CallExpression":
-        function_name = node["callee"]["name"]
-
-        # Process the function call
-        clarity_function_call = f"({function_name} {', '.join(traverse_ast(arg) for arg in node['arguments'])})"
-
-        # Additional processing or transformation of the Clarity function call can be done here
-
-        # Traverse the function arguments
-        for arg in node["arguments"]:
-            traverse_ast(arg)
-
-        return clarity_function_call
-
-
-    elif node["type"] == "IfStatement":
-        # Process the if statement
-        clarity_if_statement = "(if"
-
-        # Traverse the test expression
-        clarity_if_statement += f" {traverse_ast(node['test'])}"
-
-        # Traverse the consequent block
-        clarity_if_statement += f"\n{traverse_ast(node['consequent'])}"
-
-        # Traverse the alternate block (if present)
-        if "alternate" in node:
-            clarity_if_statement += f"\n(else {traverse_ast(node['alternate'])})"
-
-        clarity_if_statement += ")"
-
-        # Additional processing or transformation of the Clarity if statement can be done here
-
-        return clarity_if_statement
-
-    elif node["type"] == "BinaryExpression":
-        left_operand = traverse_ast(node["left"])
-        right_operand = traverse_ast(node["right"])
-        operator = node["operator"]
-
-        # Process the binary operation, e.g., convert to Clarity binary operation
-        clarity_binary_expression = f"({left_operand} {operator} {right_operand})"
-
-        return clarity_binary_expression
-    
-    elif node["type"] == "UnaryExpression":
-        operand = traverse_ast(node["argument"])
-        operator = node["operator"]
-
-        # Process the unary operation, e.g., convert to Clarity unary operation
-        clarity_unary_expression = f"({operator}{operand})"
-
-        return clarity_unary_expression
-
-    elif node["type"] == "LogicalExpression":
-        left_operand = traverse_ast(node["left"])
-        right_operand = traverse_ast(node["right"])
-        operator = node["operator"]
-
-        # Process the logical operation, e.g., convert to Clarity logical operation
-        clarity_logical_expression = f"({left_operand} {operator} {right_operand})"
-
-        return clarity_logical_expression
-
-    elif node["type"] == "ArrayExpression":
-        elements = [traverse_ast(element) for element in node["elements"]]
-
-        # Process the array literal, e.g., convert to Clarity array literal
-        clarity_array_expression = f"(list {', '.join(elements)})"
-
-        return clarity_array_expression
-
-    elif node["type"] == "ObjectExpression":
-        properties = []
-        for prop in node["properties"]:
-            key = traverse_ast(prop["key"])
-            value = traverse_ast(prop["value"])
-            properties.append(f"{key} {value}")
-
-        # Process the object literal, e.g., convert to Clarity object literal
-        clarity_object_expression = f"(tuple ({', '.join(properties)}))"
-
-        return clarity_object_expression
-
-    elif node["type"] == "ReturnStatement":
-        argument = traverse_ast(node["argument"])
-
-        # Process the return statement, e.g., convert to Clarity return statement
-        clarity_return_statement = f"(return {argument})"
-
-        return clarity_return_statement
-
-    elif node["type"] == "MemberExpression":
-        object_name = traverse_ast(node["object"])
-        property_name = node["property"]["name"]
-        clarity_member_expression = f"({object_name}.{property_name})"
-        return clarity_member_expression
-
-    elif node["type"] == "Print":
-        message = traverse_ast(node["message"])
-        clarity_print_statement = f"(print {message})"
-        return clarity_print_statement
-
-    elif node["type"] == "VarSet":
-        variable_name = node["name"]["name"]
-        value = traverse_ast(node["value"])
-        clarity_var_set_statement = f"(var-set! {variable_name} {value})"
-        return clarity_var_set_statement
-
-    elif node["type"] == "VarGet":
-        variable_name = node["name"]["name"]
-        clarity_var_get_expression = f"(var-get {variable_name})"
-        return clarity_var_get_expression
-
-    elif node["type"] == "Int":
-        value = node["value"]
-        clarity_int_literal = f"{value}"
-        return clarity_int_literal
-
-    elif node["type"] == "UInt":
-        value = node["value"]
-        clarity_uint_literal = f"{value}u"
-        return clarity_uint_literal
-
-    elif node["type"] == "Bool":
-        value = node["value"]
-        clarity_bool_literal = f"{value}"
-        return clarity_bool_literal
-
-    elif node["type"] == "Principal":
-        address = node["address"]
-        clarity_principal_literal = f"(principal \"{address}\")"
-        return clarity_principal_literal
-
-    # Add more conditions for other types of AST nodes as needed
-
-    # Handle other types of nodes or unsupported constructs as required
+    if node.type == "Program":
+        return traverse_ast(node.body[0])
+    elif node.type == "Script":
+        return traverse_ast(node.body[0])
+    elif node.type == "Literal":
+        return transpile_literal(node)
+    elif node.type == "Identifier":
+        return transpile_identifier(node)
+    elif node.type == "FunctionDeclaration":
+        return transpile_function_declaration(node)
+    elif node.type == "VariableDeclaration":
+        return transpile_variable_declaration(node)
+    elif node.type == "AssignmentExpression":
+        return transpile_assignment_expression(node)
+    elif node.type == "CallExpression":
+        return transpile_call_expression(node)
+    elif node.type == "IfStatement":
+        return transpile_if_statement(node)
+    elif node.type == "Principal":
+        return transpile_principal(node)
+    elif node.type == "BlockStatement":
+        return transpile_block_statement(node)
+    elif node.type == "BinaryExpression":
+        return transpile_binary_expression(node)
+    elif node.type == "ReturnStatement":
+        return transpile_return_statement(node)
+    elif node.type == "CallExpression":
+        return transpile_call_expression(node)
+    elif node.type == "LogicalExpression":
+        return transpile_logical_expression(node)
     else:
-        print(f"Unsupported node type: {node['type']}")
+        raise NotImplementedError(f"Node type '{node.type}' not implemented.")
 
-def main():
-    # Read the JavaScript source code from a file or any other source
-    with open("my_script.js", "r") as file:
-        source_code = file.read()
+# Example usage
+js_code = """
 
-    # Transpile the JavaScript code to Clarity
-    transpile_js_to_clarity(source_code)
+var x = 5;
+var y = 10;
+const z = 23;
+var myprincipal = "ST1HTBVD3JG9C05J7HBJTHGR0GGW7KXW28M5JS8QE.my-contract";
+var mybool = true && false;
+function add(a, b) {
+    var result = a + b;
+    return result;
+}
 
-if __name__ == "__main__":
-    main()
+var sum = add(x, y);
+"""
+
+#try:
+js_code = js_code.strip()
+if js_code[0] != '{' or js_code[-1] != '}':
+    js_code = '{' + js_code + '}'
+ast = esprima.parseScript(js_code)
+clarity_code = traverse_ast(ast)[6:-2]
+print(clarity_code)
+#except Exception as e:
+#    print(f"An error occurred: {str(e)}")
