@@ -7,7 +7,7 @@ This is a transpiler that converts JavaScript code into Clarity smart contracts.
 Clone this repository and install the required dependencies:
 
 ```bash
-git clone https://github.com/jo-tm/js-to-clarity-transpiler.git
+git clone https://github.com/jio-gl/js-to-clarity-transpiler.git
 cd js-to-clarity-transpiler
 pip install -r requirements.txt
 ```
